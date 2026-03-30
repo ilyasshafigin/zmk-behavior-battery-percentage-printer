@@ -34,10 +34,17 @@ struct behavior_battery_printer_data {
     uint8_t chars_len;
     uint8_t current_idx;
     bool key_pressed;
+    uint32_t digit_keycodes[10];
+    uint32_t space_keycode;
+    uint32_t dot_keycode;
+    uint32_t percent_keycode;
 };
 
 struct behavior_battery_printer_config {
-    /* reserved for future options */
+    uint32_t digit_keycodes[10];
+    uint32_t space_keycode;
+    uint32_t dot_keycode;
+    uint32_t percent_keycode;
 };
 
 static inline void reset_typing_state(struct behavior_battery_printer_data *data) {
@@ -47,41 +54,35 @@ static inline void reset_typing_state(struct behavior_battery_printer_data *data
     memset(data->chars, 0, sizeof(data->chars));
 }
 
-/* explicit mapping for top-row digits (safe) */
-static const uint32_t digit_keycodes[10] = {
-    NUMBER_0, NUMBER_1, NUMBER_2, NUMBER_3, NUMBER_4,
-    NUMBER_5, NUMBER_6, NUMBER_7, NUMBER_8, NUMBER_9
-};
-
 /* map an ASCII char used in our phrase to an encoded keycode understood by
  * raise_zmk_keycode_state_changed_from_encoded().
  *
  * Supports:
- *  - digits '0'..'9' -> top-row NUMBER_*
+ *  - digits '0'..'9' -> configurable per-device DT property "digit-keycodes"
  *  - letters a..z / A..Z -> letter keycodes (uppercase uses LS(...) to require shift)
- *  - space ' ' -> SPACE
- *  - dot '.' -> DOT
- *  - percent '%' -> PERCENT (macro includes shift)
+ *  - space ' ' -> configurable per-device DT property "space-keycode"
+ *  - dot '.' -> configurable per-device DT property "dot-keycode"
+ *  - percent '%' -> configurable per-device DT property "percent-keycode"
  */
-static uint32_t char_to_encoded_keycode(uint8_t ch) {
+static uint32_t char_to_encoded_keycode(uint8_t ch, const struct behavior_battery_printer_data *data) {
     /* digits */
     if (ch >= '0' && ch <= '9') {
-        return digit_keycodes[ch - '0'];
+        return data->digit_keycodes[ch - '0'];
     }
 
     /* space */
     if (ch == ' ') {
-        return SPACE;
+        return data->space_keycode;
     }
 
     /* dot/period */
     if (ch == '.') {
-        return DOT;
+        return data->dot_keycode;
     }
 
     /* percent sign (uses define that includes shift) */
     if (ch == '%') {
-        return PERCENT;
+        return data->percent_keycode;
     }
 
     return 0;
@@ -164,7 +165,7 @@ static void send_key(struct behavior_battery_printer_data *data) {
     }
 
     uint8_t ch = data->chars[data->current_idx];
-    uint32_t keycode = char_to_encoded_keycode(ch);
+    uint32_t keycode = char_to_encoded_keycode(ch, data);
     if (!keycode) {
         LOG_WRN("behavior_battery_printer: unsupported char '%c' (idx %u)", ch, data->current_idx);
         reset_typing_state(data);
@@ -198,7 +199,12 @@ static void type_keys_work(struct k_work *work) {
 
 static int behavior_battery_printer_init(const struct device *dev) {
     struct behavior_battery_printer_data *data = dev->data;
+    const struct behavior_battery_printer_config *config = dev->config;
     k_work_init_delayable(&data->typing_work, type_keys_work);
+    memcpy(data->digit_keycodes, config->digit_keycodes, sizeof(data->digit_keycodes));
+    data->space_keycode = config->space_keycode;
+    data->dot_keycode = config->dot_keycode;
+    data->percent_keycode = config->percent_keycode;
     reset_typing_state(data);
     return 0;
 }
@@ -294,7 +300,23 @@ static const struct behavior_driver_api behavior_battery_printer_api = {
 
 #define BAT_INST(idx) \
     static struct behavior_battery_printer_data behavior_battery_printer_data_##idx; \
-    static const struct behavior_battery_printer_config behavior_battery_printer_config_##idx = {}; \
+    static const struct behavior_battery_printer_config behavior_battery_printer_config_##idx = { \
+        .digit_keycodes = { \
+            DT_INST_PROP_BY_IDX(idx, digit_keycodes, 0), \
+            DT_INST_PROP_BY_IDX(idx, digit_keycodes, 1), \
+            DT_INST_PROP_BY_IDX(idx, digit_keycodes, 2), \
+            DT_INST_PROP_BY_IDX(idx, digit_keycodes, 3), \
+            DT_INST_PROP_BY_IDX(idx, digit_keycodes, 4), \
+            DT_INST_PROP_BY_IDX(idx, digit_keycodes, 5), \
+            DT_INST_PROP_BY_IDX(idx, digit_keycodes, 6), \
+            DT_INST_PROP_BY_IDX(idx, digit_keycodes, 7), \
+            DT_INST_PROP_BY_IDX(idx, digit_keycodes, 8), \
+            DT_INST_PROP_BY_IDX(idx, digit_keycodes, 9), \
+        }, \
+        .space_keycode = DT_INST_PROP(idx, space_keycode), \
+        .dot_keycode = DT_INST_PROP(idx, dot_keycode), \
+        .percent_keycode = DT_INST_PROP(idx, percent_keycode), \
+    }; \
     BEHAVIOR_DT_INST_DEFINE(idx, behavior_battery_printer_init, NULL, \
                             &behavior_battery_printer_data_##idx, \
                             &behavior_battery_printer_config_##idx, \
